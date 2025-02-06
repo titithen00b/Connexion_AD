@@ -1,0 +1,104 @@
+# Définir les paramètres
+$logName = "Security"
+$eventID_Success = 4624  # Connexion réussie
+$eventID_Failed  = 4625  # Connexion échouée
+$username = "Administrateur"
+
+# Définir la période de recherche (YYYY-MM-DD HH:mm:ss)
+$dateDebut = Get-Date "2025-02-06 12:00:00"
+$dateFin   = Get-Date "2025-02-06 15:00:59"
+
+# Fonction pour traduire le LogonType en texte
+function Get-LogonTypeText($logonType) {
+    switch ($logonType) {
+        2  { "Session Locale (Interactive)" }
+        3  { "Réseau (SMB, Partage…)" }
+        4  { "Tâche planifiée" }
+        5  { "Service" }
+        7  { "Déverrouillage de session" }
+        8  { "Réseau clair (Cleartext)" }
+        9  { "Session Nouvelle (Terminal Services)" }
+        10 { "Bureau à distance (RDP)" }
+        11 { "Connexion via Cached Credentials" }
+        default { "Inconnu ($logonType)" }
+    }
+}
+
+# Fonction pour traduire les motifs d'échec
+function Get-FailureReason($status) {
+    switch ($status) {
+        "0xC000006A" { "Mot de passe incorrect" }
+        "0xC000006D" { "Nom d'utilisateur inconnu" }
+        "0xC000006F" { "Mot de passe expiré" }
+        "0xC0000070" { "Compte restreint" }
+        "0xC0000071" { "Compte désactivé" }
+        "0xC0000224" { "Doit changer le mot de passe" }
+        "0xC0000234" { "Compte verrouillé" }
+        default { "Erreur inconnue ($status)" }
+    }
+}
+
+# Filtrage optimisé pour récupérer connexions réussies et échouées
+$filter_Success = @{
+    LogName   = $logName
+    ID        = $eventID_Success
+    StartTime = $dateDebut
+    EndTime   = $dateFin
+}
+$filter_Failed = @{
+    LogName   = $logName
+    ID        = $eventID_Failed
+    StartTime = $dateDebut
+    EndTime   = $dateFin
+}
+
+# Récupération des logs
+$logins_Success = Get-WinEvent -FilterHashtable $filter_Success -ErrorAction SilentlyContinue | Where-Object {
+    $_.Properties[5].Value -eq $username
+}
+
+$logins_Failed = Get-WinEvent -FilterHashtable $filter_Failed -ErrorAction SilentlyContinue | Where-Object {
+    $_.Properties[5].Value -eq $username
+}
+
+# Affichage formaté avec colonnes bien alignées (IPV6 prise en charge)
+if ($logins_Success -or $logins_Failed) {
+    $border = "╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗"
+    $header = "║ Date et Heure             ║ Utilisateur       ║ Domaine   ║ Type de Connexion             ║ IP                                 ║ Statut                ║"
+    $separator1 = "╠═══════════════════════════╦═══════════════════╦═══════════╦═══════════════════════════════╦════════════════════════════════════╦═══════════════════════╣"
+    $separator = "╠═══════════════════════════╬═══════════════════╬═══════════╬═══════════════════════════════╬════════════════════════════════════╬═══════════════════════╣"
+
+    Write-Host "`n$border" -ForegroundColor Cyan
+    Write-Host "                                🔍 Connexions réussies et échouées pour '$username'" -ForegroundColor Cyan
+    Write-Host "$separator1" -ForegroundColor Cyan
+    Write-Host "$header" -ForegroundColor Cyan
+    Write-Host "$separator" -ForegroundColor Cyan
+
+    # Affichage des connexions réussies
+    $logins_Success | ForEach-Object {
+        $time = $_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+        $user = $_.Properties[5].Value
+        $domain = $_.Properties[6].Value
+        $logonType = Get-LogonTypeText $_.Properties[8].Value
+        $ip = $_.Properties[18].Value
+
+        Write-Host ("║ {0,-25} ║ {1,-17} ║ {2,-9} ║ {3,-29} ║ {4,-34} ║ ✅ Réussie           ║" -f $time, $user, $domain, $logonType, $ip) -ForegroundColor Green
+    }
+
+    # Affichage des connexions échouées
+    $logins_Failed | ForEach-Object {
+        $time = $_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+        $user = $_.Properties[5].Value
+        $domain = $_.Properties[6].Value
+        $logonType = Get-LogonTypeText $_.Properties[8].Value
+        $ip = $_.Properties[18].Value
+        $status = $_.Properties[7].Value
+        $failureReason = Get-FailureReason $status
+
+        Write-Host ("║ {0,-25} ║ {1,-17} ║ {2,-9} ║ {3,-29} ║ {4,-34} ║ ❌ {5,-17} ║" -f $time, $user, $domain, $logonType, $ip, $failureReason) -ForegroundColor Red
+    }
+
+    Write-Host "╚═══════════════════════════╩═══════════════════╩═══════════╩═══════════════════════════════╩════════════════════════════════════╩═══════════════════════╝`n" -ForegroundColor Cyan
+} else {
+    Write-Host "`n❌ Aucune connexion réussie ou échouée trouvée pour '$username' entre $dateDebut et $dateFin." -ForegroundColor Red
+}
